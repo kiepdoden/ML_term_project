@@ -1,0 +1,29 @@
+services:
+  db:
+    cpuset: "0,1,8,9"
+  free5gc-nrf:
+    cpuset: "0,1,8,9"
+  free5gc-amf:
+    cpuset: "0,1,8,9"
+  free5gc-ausf:
+    cpuset: "0,1,8,9"
+  free5gc-nssf:
+    cpuset: "0,1,8,9"
+  free5gc-pcf:
+    cpuset: "0,1,8,9"
+  free5gc-smf:
+    cpuset: "0,1,8,9"
+  free5gc-udm:
+    cpuset: "0,1,8,9"
+  free5gc-udr:
+    cpuset: "0,1,8,9"
+  free5gc-chf:
+    cpuset: "0,1,8,9"
+  free5gc-nef:
+    cpuset: "0,1,8,9"
+  free5gc-webui:
+    cpuset: "0,1,8,9"
+  free5gc-upf:
+    cpuset: "0,1,8,9"
+  ueransim:
+    cpuset: "0,1,8,9"
