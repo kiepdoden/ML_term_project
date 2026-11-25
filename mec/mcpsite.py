@@ -10,10 +10,12 @@ Wait estimates sent in each status datagram:
   wait_b2_ms        per-tool mean run time, no arguments        (B2)
   wait_pred_ms      per-call prediction from the arguments      (method)
   wait_oracle_ms    run time measured offline for that call     (ablation)
-Each one is (sum of remaining work of queued and running calls) / workers.
+Each one is the time until a worker is free for a new call, replaying the
+FIFO queue on the workers with that estimator's run times.
 """
 import asyncio
 import hashlib
+import heapq
 import json
 import os
 import socket
@@ -86,8 +88,16 @@ class Estimators:
 
 class Pool:
     def __init__(self, site, svc, workers, run_fn_factory, log_path,
-                 timeout=30.0, estimators=None, on_timeout=None):
+                 timeout=30.0, estimators=None, on_timeout=None, pin=False,
+                 resid_frac=float(os.environ.get("RESID_FRAC", "0.5"))):
         """run_fn_factory(i) -> resource handed to job.fn(resource, args)."""
+        self.pin = pin
+        self.resid_frac = resid_frac
+        self.calib = {"b2": 1.0, "pred": 1.0, "oracle": 1.0}
+        self.arrived = 0
+        self.arr_work = {"b2": 0.0, "pred": 0.0, "oracle": 0.0}
+        self.calib_alpha = float(os.environ.get("CALIB_ALPHA", "0.1"))
+        self.work_cpus = None
         self.site = site
         self.svc = svc
         self.n = workers
@@ -102,8 +112,30 @@ class Pool:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         self.log = open(log_path, "a", buffering=1)
 
+    def _plan_cpus(self):
+        """One worker per physical core (first hardware thread of each core);
+        the event loop and the estimator get the other threads. Without this,
+        two workers can share one core and long calls run ~35% slower."""
+        try:
+            cpus = sorted(os.sched_getaffinity(0))
+            cores = {}
+            for c in cpus:
+                with open(f"/sys/devices/system/cpu/cpu{c}/topology/core_id") as fh:
+                    cores.setdefault(int(fh.read()), []).append(c)
+            firsts = [v[0] for _, v in sorted(cores.items())]
+            if len(firsts) < self.n:
+                return None, None
+            work = firsts[: self.n]
+            rest = [c for c in cpus if c not in work] or cpus
+            return work, rest
+        except (OSError, AttributeError, ValueError):
+            return None, None
+
     async def start(self):
         self.q = asyncio.Queue()
+        self.work_cpus, rest = self._plan_cpus() if self.pin else (None, None)
+        if rest:
+            os.sched_setaffinity(0, rest)     # this (main) thread and threads it starts
         for i in range(self.n):
             asyncio.create_task(self._worker(i))
 
@@ -114,6 +146,12 @@ class Pool:
             # predict on arrival, for every call and every policy, so all
             # policies pay the same estimator cost (EXPLAIN + trees, a few ms)
             await asyncio.to_thread(self.est.pred_s, job)
+        # arrivals and their estimated work: the controller turns these into
+        # an arrival rate to split the next interval's calls (water-filling)
+        self.arrived += 1
+        self.arr_work["b2"] += self.calib["b2"] * self.est.b2_s(job)
+        self.arr_work["pred"] += self.calib["pred"] * self.est.pred_s(job)
+        self.arr_work["oracle"] += self.calib["oracle"] * self.est.oracle_s(job)
         self.queued[job.id] = job
         await self.q.put(job)
         return await job.fut
@@ -126,7 +164,7 @@ class Pool:
             job.t_start = time.time()
             job.worker = i
             self.running[job.id] = job
-            task = asyncio.ensure_future(asyncio.to_thread(job.fn, res, job.args))
+            task = asyncio.ensure_future(asyncio.to_thread(self._run_pinned, i, job.fn, res, job.args))
             done, _ = await asyncio.wait({task}, timeout=self.timeout)
             if not done and self.on_timeout:
                 self.on_timeout(res)
@@ -139,6 +177,7 @@ class Pool:
             t_end = time.time()
             self.running.pop(job.id, None)
             self.done += 1
+            self._calibrate(job, t_end - job.t_start)
             self.log.write(json.dumps({
                 "site": self.site, "svc": self.svc, "id": job.id,
                 "call_id": job.call_id, "tool": job.tool, "args": job.args,
@@ -154,11 +193,44 @@ class Pool:
                 else:
                     job.fut.set_result(out)
 
-    def _wait_ms(self, est_fn):
+    def _run_pinned(self, i, fn, res, args):
+        if self.work_cpus:
+            os.sched_setaffinity(0, {self.work_cpus[i]})
+        return fn(res, args)
+
+    def _calibrate(self, job, run_s):
+        """Online calibration (the W7 twin idea): run times at this site drift
+        from the offline estimates (e.g. ~1.4x slower when all workers are
+        busy). Keep an EWMA of measured / estimated run time per estimator,
+        over calls estimated at >= 50 ms, and scale every estimate by it.
+        B2, the method and the oracle get the same treatment."""
+        for name, fn in (("b2", self.est.b2_s), ("pred", self.est.pred_s),
+                         ("oracle", self.est.oracle_s)):
+            if name == "pred" and job.pred_s is None and self.est.model is not None:
+                continue
+            e = fn(job)
+            if e >= 0.05:
+                r = min(5.0, max(0.2, run_s / e))
+                self.calib[name] = (1 - self.calib_alpha) * self.calib[name] + self.calib_alpha * r
+
+    def _wait_ms(self, est_fn, name):
+        """How long a NEW call would wait here: replay the FIFO queue on the
+        workers. Each worker is free after the remaining time of its running
+        call (0 if idle); queued calls take the earliest free worker in order;
+        the new call waits until the earliest worker after that. (Remaining
+        work / workers, the fluid view, is wrong with two workers: one long
+        call plus one idle worker means no wait at all.) A running call that
+        has outlived its estimate is not counted as done: run times are
+        heavy-tailed, so its expected remaining time grows with its age."""
         now = time.time()
-        work = sum(est_fn(j) for j in self.queued.values())
-        work += sum(max(est_fn(j) - (now - j.t_start), 0.0) for j in self.running.values())
-        return 1000.0 * work / self.n
+        k = self.calib[name]
+        free = [max(k * est_fn(j) - (now - j.t_start), self.resid_frac * (now - j.t_start))
+                for j in self.running.values()]
+        free += [0.0] * max(0, self.n - len(free))
+        heapq.heapify(free)
+        for j in self.queued.values():               # dicts keep arrival order
+            heapq.heappush(free, heapq.heappop(free) + k * est_fn(j))
+        return 1000.0 * free[0]
 
     def status(self):
         return {
@@ -167,9 +239,12 @@ class Pool:
             "running": len(self.running),
             "inflight": len(self.queued) + len(self.running),
             "done": self.done,
-            "wait_b2_ms": round(self._wait_ms(self.est.b2_s), 3),
-            "wait_pred_ms": round(self._wait_ms(self.est.pred_s), 3),
-            "wait_oracle_ms": round(self._wait_ms(self.est.oracle_s), 3),
+            "wait_b2_ms": round(self._wait_ms(self.est.b2_s, "b2"), 3),
+            "wait_pred_ms": round(self._wait_ms(self.est.pred_s, "pred"), 3),
+            "wait_oracle_ms": round(self._wait_ms(self.est.oracle_s, "oracle"), 3),
+            "calib": {k: round(v, 3) for k, v in self.calib.items()},
+            "arrived": self.arrived,
+            "arr_work_s": {k: round(v, 4) for k, v in self.arr_work.items()},
         }
 
     async def pusher(self, controller, period):

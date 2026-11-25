@@ -11,7 +11,7 @@ a = sys.argv[1:]
 print(a[a.index("--duration") + 1] if "--duration" in a else "300")
 EOF
 )
-sudo python3 core/controller.py --policy "$POLICY" --duration $(python3 -c "print(float('$DUR') + 20)") \
+sudo python3 core/controller.py --policy "$POLICY" ${CTRL_ARGS:-} --duration $(python3 -c "print(float('$DUR') + 20)") \
     --log "$DIR/controller.jsonl" &
 CPID=$!
 sleep 2

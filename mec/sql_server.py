@@ -51,7 +51,7 @@ est = Estimators(os.path.join(args.data, "b2_sql.json"),
                  os.path.join(args.data, "oracle_sql.json"))
 pool = Pool(args.site, "sql", args.workers, open_worker, args.log,
             timeout=args.timeout, estimators=est,
-            on_timeout=lambda con: con.interrupt())
+            on_timeout=lambda con: con.interrupt(), pin=True)
 
 
 def load_model():
