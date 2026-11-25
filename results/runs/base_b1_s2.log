@@ -1,0 +1,2 @@
+{"chains": "results/rec_sf10/chains_joined.jsonl", "mean_work_s": 0.4185602501105358, "mean_span_s": 5.901764674548289, "idle_mean_s": 3.067383542106052, "max_reachable_load": 1.0638180439037204, "tasks": "results/rec_sf10/check1/test_tasks.txt", "ue_ips": "", "clients": 90, "load": 0.7, "capacity": 6.0, "think_scale": 0.2, "duration": 300.0, "warmup": 60.0, "seed": 2, "timeout": 60.0, "bg_site": "10.201.1.10", "bg_load": 0.3, "bg_workers": 2.0, "bg_min_run": 0.2, "out": "results/runs/base_b1_s2/client.jsonl"}
+run done: results/runs/base_b1_s2

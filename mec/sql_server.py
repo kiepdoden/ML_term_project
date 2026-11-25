@@ -26,7 +26,7 @@ from mcpsite import Estimators, Pool, header, quiet_mcp_logging
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--site", default=os.environ.get("SITE", "mec1"))
-ap.add_argument("--data", default="/data")
+ap.add_argument("--data", default=os.environ.get("DATA", "/data"))
 ap.add_argument("--workers", type=int, default=int(os.environ.get("WORKERS", "2")))
 ap.add_argument("--port", type=int, default=8000)
 ap.add_argument("--log", default="/var/log/mcp/sql_calls.jsonl")
@@ -43,7 +43,8 @@ TABLES = ["region", "nation", "supplier", "customer", "part", "partsupp",
 def open_worker(i):
     path = os.path.join(args.data, f"tpch_w{i}.duckdb")
     return duckdb.connect(path, read_only=True,
-                          config={"threads": 1, "memory_limit": "2GB"})
+                          config={"threads": 1, "memory_limit": "3GB",
+                                  "temp_directory": f"/tmp/duckdb_w{i}"})
 
 
 est = Estimators(os.path.join(args.data, "b2_sql.json"),
@@ -52,6 +53,35 @@ pool = Pool(args.site, "sql", args.workers, open_worker, args.log,
             timeout=args.timeout, estimators=est,
             on_timeout=lambda con: con.interrupt())
 
+
+def load_model():
+    """Method v1: run-time model trained offline (predict/train.py). EXPLAIN
+    runs on its own small DuckDB instance (the base file), under a lock."""
+    path = os.path.join(args.data, "runtime_model.pkl")
+    if not os.path.exists(path):
+        return None
+    import pickle
+    import threading
+
+    import numpy as np
+    import pandas as pd
+    from features import call_features
+    with open(path, "rb") as fh:
+        mdl = pickle.load(fh)
+    con = duckdb.connect(os.path.join(args.data, "tpch.duckdb"), read_only=True,
+                         config={"threads": 1, "memory_limit": "512MB"})
+    lock = threading.Lock()
+    cols = mdl["columns"]
+
+    def predict(tool, a):
+        with lock:
+            f = call_features(con, tool, a)
+        x = pd.DataFrame([[f.get(c, 0.0) for c in cols]], columns=cols)
+        return float(np.exp(mdl["mean"].predict(x)[0]) * mdl["smear"])
+    return predict
+
+
+est.model = load_model()
 mcp = FastMCP("tpch-sql", stateless_http=True, json_response=True,
               log_level="ERROR")
 quiet_mcp_logging()

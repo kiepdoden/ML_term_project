@@ -12,6 +12,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--out", default="/data")
 ap.add_argument("--sf", type=float, default=1.0)
 ap.add_argument("--workers", type=int, default=2)
+ap.add_argument("--no-kv", action="store_true")
 a = ap.parse_args()
 os.makedirs(a.out, exist_ok=True)
 
@@ -29,6 +30,10 @@ for i in range(a.workers):
         shutil.copyfile(base, dst)
 
 con = duckdb.connect(base, read_only=True)
+if a.no_kv:
+    print("rows:", {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                    for t in ["customer", "orders", "lineitem"]})
+    raise SystemExit(0)
 kv = {}
 for ck, name, phone, seg, bal, nat in con.execute(
         "SELECT c_custkey, c_name, c_phone, c_mktsegment, c_acctbal, n_name "

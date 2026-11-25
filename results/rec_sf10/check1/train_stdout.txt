@@ -1,0 +1,13 @@
+      split    n  r2_log  r2_sec  mae_ms  pinball50_log  pinball90_log  b2_r2_log  b2_r2_sec  b2_mae_ms     calls
+    by task 3336   0.876   0.545  46.266          0.246          0.131     -1.513     -0.008    208.663   run_sql
+by template 3336   0.624   0.095 123.856          0.519          0.313     -1.528     -0.034    213.557   run_sql
+    by task 5119   0.845   0.500  37.488          0.236          0.121     -1.371      0.023    136.910 all tools
+by template 5119   0.617   0.285  74.030          0.419          0.244     -1.361     -0.004    138.093 all tools
+                    count   mean    std  min  50%    90%     99%      max
+tool                                                                     
+describe_table  1393000.0    5.0   13.3  0.2  2.5    7.9    18.2    262.8
+kv_get           253000.0    5.6    0.3  5.2  5.5    6.0     6.7      7.5
+list_tables      137000.0    4.4    3.2  2.0  2.6    8.8    15.5     22.0
+run_sql         3336000.0  136.7  505.5  0.3  2.9  289.8  2105.5  18051.8
+fixed split: {"train_calls": 3071, "test_calls": 2048, "r2_log_all": 0.783, "r2_sec_all": 0.465, "r2_log_sql": 0.817, "r2_sec_sql": 0.457}
+saved models to results/rec_sf10/check1

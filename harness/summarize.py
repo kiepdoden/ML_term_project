@@ -29,13 +29,13 @@ def load(d):
         c["site"] = s["site"] if s else None
         c["wait_s"] = s["wait_s"] if s else None
         c["run_s"] = s["run_s"] if s else None
-    return [c for c in calls if c["measured"]]
+    return [c for c in calls if c.get("measured") and not c.get("bg")]
 
 
 def summary(calls, short_cut=0.05):
-    lat = [c["latency_s"] for c in calls if c["ok"]]
-    short = [c["latency_s"] for c in calls if c["ok"] and (c["iso_run_s"] or 0) < short_cut]
-    long_ = [c["latency_s"] for c in calls if c["ok"] and (c["iso_run_s"] or 0) >= short_cut]
+    lat = [c["latency_s"] for c in calls if c.get("err") is None]
+    short = [c["latency_s"] for c in calls if c.get("err") is None and (c["iso_run_s"] or 0) < short_cut]
+    long_ = [c["latency_s"] for c in calls if c.get("err") is None and (c["iso_run_s"] or 0) >= short_cut]
     sites = {}
     for c in calls:
         sites[c["site"]] = sites.get(c["site"], 0) + 1
@@ -49,7 +49,8 @@ def summary(calls, short_cut=0.05):
     }
 
 
-for d in sys.argv[1:]:
+if __name__ == "__main__":
+  for d in sys.argv[1:]:
     s = summary(load(d))
     print(os.path.basename(d.rstrip("/")), json.dumps({k: (round(v, 1) if isinstance(v, float) else v)
                                                        for k, v in s.items()}))

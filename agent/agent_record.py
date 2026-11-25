@@ -42,7 +42,11 @@ a = ap.parse_args()
 
 SYSTEM = ("You are a data analyst agent. You answer questions about a TPC-H database "
           "(tables region, nation, supplier, customer, part, partsupp, orders, lineitem; "
-          "DuckDB SQL dialect) by calling tools. Look at table columns when you are not sure. "
+          "DuckDB SQL dialect) by calling tools. Column names carry the table prefix: "
+          "r_ (region), n_ (nation), s_ (supplier), c_ (customer), p_ (part), ps_ (partsupp), "
+          "o_ (orders), l_ (lineitem), e.g. l_extendedprice, o_orderdate, s_suppkey. "
+          "If you are not sure about a column, call describe_table first. "
+          "If a query fails, read the error and fix the query. "
           "Use kv_get for single customer or supplier records (keys 'customer:<custkey>', "
           "'supplier:<suppkey>'). Use one tool call at a time. When you have the answer, "
           "reply with a short final answer and no tool call.")
@@ -65,20 +69,29 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"key": {"type": "string"}},
                        "required": ["key"]}}},
 ]
-SERVER = {"list_tables": a.sql, "describe_table": a.sql, "run_sql": a.sql, "kv_get": a.kv}
+SQL_URLS = a.sql.split(",")                  # several replicas: one per task run, round robin
+KV_URLS = a.kv.split(",")
+
+
+def servers(i):
+    s, k = SQL_URLS[i % len(SQL_URLS)], KV_URLS[i % len(KV_URLS)]
+    return {"list_tables": s, "describe_table": s, "run_sql": s, "kv_get": k}
+
+
+SERVER = servers(0)
 HDR = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
        "Connection": "close"}
 llm = OpenAI(base_url=a.llm, api_key=a.key, timeout=300)
 
 
-def mcp_call(tool, args, call_id):
+def mcp_call(tool, args, call_id, srv):
     tr = httpx.HTTPTransport(local_address=a.src, socket_options=[
         (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]) if a.src else httpx.HTTPTransport(
         socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)])
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": tool, "arguments": args}}
     with httpx.Client(transport=tr, headers=HDR | {"X-Call-Id": call_id}, timeout=60) as c:
-        r = c.post(SERVER[tool], json=body)
+        r = c.post(srv[tool], json=body)
     r.raise_for_status()
     res = r.json()
     if "error" in res:
@@ -88,7 +101,8 @@ def mcp_call(tool, args, call_id):
     return not res["result"].get("isError", False), text[:4000]
 
 
-def run_one(task, run):
+def run_one(task, run, idx=0):
+    srv = servers(idx)
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task["prompt"]}]
     steps, llm_s, t0 = [], 0.0, time.time()
     answer = None
@@ -115,7 +129,7 @@ def run_one(task, run):
         call_id = uuid.uuid4().hex[:16]
         t_c = time.time()
         try:
-            ok, out = mcp_call(tc.function.name, args, call_id) if tc.function.name in SERVER \
+            ok, out = mcp_call(tc.function.name, args, call_id, srv) if tc.function.name in srv \
                 else (False, f"unknown tool {tc.function.name}")
         except Exception as e:  # noqa: BLE001
             ok, out = False, f"{type(e).__name__}: {e}"[:500]
@@ -124,7 +138,7 @@ def run_one(task, run):
         msgs.append({"role": "tool", "tool_call_id": tc.id, "content": out})
     return {"task": task["task"], "template": task["template"], "run": run,
             "steps": steps, "n_calls": len(steps), "answer": answer,
-            "llm_s": llm_s, "wall_s": time.time() - t0}
+            "sql_url": srv["run_sql"], "llm_s": llm_s, "wall_s": time.time() - t0}
 
 
 def main():
@@ -143,7 +157,8 @@ def main():
     print(f"{len(jobs)} task runs to do", flush=True)
     n_calls = 0
     with open(a.out, "a", buffering=1) as f, ThreadPoolExecutor(a.parallel) as ex:
-        for i, rec in enumerate(ex.map(lambda j: run_one(*j), jobs)):
+        for i, rec in enumerate(ex.map(lambda ij: run_one(ij[1][0], ij[1][1], ij[0]),
+                                       enumerate(jobs))):
             f.write(json.dumps(rec) + "\n")
             n_calls += rec["n_calls"]
             if i % 10 == 0:

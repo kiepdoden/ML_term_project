@@ -110,6 +110,10 @@ class Pool:
     async def submit(self, tool, args, fn, call_id=None):
         job = Job(tool, args, fn, call_id)
         job.inflight_at_arr = len(self.queued) + len(self.running)
+        if self.est.model is not None:
+            # predict on arrival, for every call and every policy, so all
+            # policies pay the same estimator cost (EXPLAIN + trees, a few ms)
+            await asyncio.to_thread(self.est.pred_s, job)
         self.queued[job.id] = job
         await self.q.put(job)
         return await job.fut
@@ -142,6 +146,7 @@ class Pool:
                 "t_end": t_end, "wait_s": job.t_start - job.t_arr,
                 "run_s": t_end - job.t_start, "worker": i,
                 "inflight_at_arr": job.inflight_at_arr, "err": err,
+                "pred_s": job.pred_s,
             }) + "\n")
             if not job.fut.done():
                 if err:

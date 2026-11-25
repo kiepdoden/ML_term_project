@@ -42,6 +42,13 @@ ap.add_argument("--duration", type=float, default=300.0)
 ap.add_argument("--warmup", type=float, default=30.0)
 ap.add_argument("--seed", type=int, default=1)
 ap.add_argument("--timeout", type=float, default=60.0)
+ap.add_argument("--bg-site", default="10.201.1.10",
+                help="replica that gets the unsteerable background load (skew)")
+ap.add_argument("--bg-load", type=float, default=0.0,
+                help="background work as a fraction of that site's capacity")
+ap.add_argument("--bg-workers", type=float, default=2.0)
+ap.add_argument("--bg-min-run", type=float, default=0.2,
+                help="background calls are recorded run_sql calls at least this long")
 ap.add_argument("--out", required=True)
 a = ap.parse_args()
 
@@ -123,10 +130,47 @@ async def client_loop(k, ip, rng):
             await asyncio.sleep(rng.expovariate(1.0 / idle) if idle > 0 else 0)
 
 
+async def background(ip, rng):
+    """Skew: long scans sent straight to one replica (local users of that
+    site that the UPF does not steer). Poisson arrivals at bg_load of its
+    capacity. Logged with bg=true and left out of the metrics."""
+    longs = [s for c in chains for s in c["steps"]
+             if s["tool"] == "run_sql" and (s.get("run_s") or 0) >= a.bg_min_run]
+    if not longs or a.bg_load <= 0:
+        return
+    mean_run = sum(s["run_s"] for s in longs) / len(longs)
+    rate = a.bg_load * a.bg_workers / mean_run           # calls per second
+    url = f"http://{a.bg_site}:8000/mcp"
+    tr = httpx.AsyncHTTPTransport(local_address=ip, socket_options=[
+        (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)])
+    async with httpx.AsyncClient(transport=tr, headers=HDR, timeout=a.timeout,
+                                 limits=httpx.Limits(max_keepalive_connections=0)) as cl:
+        async def one(s):
+            cid = uuid.uuid4().hex[:16]
+            t0 = time.time()
+            body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "run_sql", "arguments": s["args"]}}
+            try:
+                r = await cl.post(url, json=body, headers={"X-Call-Id": cid})
+                ok = r.status_code == 200
+            except Exception:  # noqa: BLE001
+                ok = False
+            out.write(json.dumps({"call_id": cid, "bg": True, "tool": "run_sql",
+                                  "iso_run_s": s["run_s"], "t_send": t0,
+                                  "t_recv": time.time(), "ok": ok,
+                                  "measured": False}) + "\n")
+        pending = set()
+        while time.time() < T_END:
+            await asyncio.sleep(rng.expovariate(rate))
+            t = asyncio.create_task(one(rng.choice(longs)))
+            pending.add(t)
+            t.add_done_callback(pending.discard)
+
+
 async def main():
     ips = ue_ips()
     rng0 = random.Random(a.seed)
-    tasks = []
+    tasks = [asyncio.create_task(background(ips[-1], random.Random(a.seed + 999)))]
     for k in range(a.clients):
         tasks.append(asyncio.create_task(
             client_loop(k, ips[k % len(ips)], random.Random(rng0.random()))))

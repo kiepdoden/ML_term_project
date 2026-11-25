@@ -4,7 +4,7 @@ set -euxo pipefail
 SITE=${1:?site}; CTRL=${2:?controller}; WORKERS=${3:-2}
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q python3-venv iproute2 jq
+apt-get install -y -q python3-venv iproute2 jq libgomp1
 [ -x /opt/mcp/bin/python ] || python3 -m venv /opt/mcp
 /opt/mcp/bin/pip install -q duckdb==1.4.1 "mcp[cli]==1.20.0" "pydantic==2.11.9" uvicorn numpy pandas scikit-learn lightgbm
 mkdir -p /data /var/log/mcp
