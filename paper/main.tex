@@ -1,0 +1,228 @@
+% Paper skeleton for paperreview.ai (venue ICLR), due 11 Dec 2026.
+% With iclr2027_conference.sty in this folder the ICLR style is used; without it
+% the same text compiles as a plain article, so the skeleton can be checked now.
+\documentclass{article}
+\IfFileExists{iclr2027_conference.sty}{%
+  \usepackage{iclr2027_conference,times}\newcommand{\mybibstyle}{iclr2027_conference}}{%
+  \usepackage{times}\usepackage[margin=1in]{geometry}\usepackage[round]{natbib}%
+  \newcommand{\mybibstyle}{plainnat}}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,calc}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\title{Wait-Aware Steering of MCP Tool Calls\\across 5G MEC Sites}
+\author{Bui Duong Kham\\Soongsil University\\\texttt{1102549018}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+An AI agent on a phone finishes one task with a chain of tool calls, and operators start
+to host the tool servers (MCP servers) at several edge sites. The mobile network can pick
+a site for every new call, but today it picks the nearest site or the one with the fewest
+calls in flight. Neither sees that one SQL tool needs 5\,ms for a lookup and several
+seconds for a scan, so a lookup can wait behind two scans. We let each tool replica
+predict the run time of every call from its arguments, compute how long a new call would
+wait for a free worker, and report this wait to a controller that steers new connections
+at the 5G user-plane gateway (UPF). On a free5GC testbed with 30 emulated phones and
+replicas at three edge sites, this lowers the 95th-percentile call latency by 16.1\%
+compared with least-load steering (95\% CI 13.2--19.5\%, 10 paired runs), and by 20\%
+for short calls. A baseline with the same wait formula but a per-tool mean run time gains
+nothing, so the gain comes from reading the arguments. \todo{one sentence on the load
+$\times$ skew crossover: where steering pays off and where the nearest site is enough.}
+\end{abstract}
+
+\section{Introduction}
+\todo{1 page. (1) Agents call tools in chains: 10--30 dependent calls per task, so the
+slowest call decides the task time; with 20 calls, $1-0.95^{20}\approx 64\%$ of tasks
+meet at least one call above the per-call p95, so we report p95 rather than the mean.
+(2) Run times of one tool spread over three orders of magnitude (TraceLab: median 0.3\,s,
+p99 3.6\,min). (3) The network can steer, but sees only addresses: call arguments are
+encrypted. (4) Our idea: the replica reads its own queue and reports a wait; the network
+uses the wait. (5) Contributions, with the measured numbers.}
+
+Contributions:
+\begin{itemize}
+  \item A wait estimator at each tool replica: it predicts the run time of each queued
+  call from its arguments and replays the queue over the workers to give the time until
+  a worker is free for a new call (Section~\ref{sec:method}).
+  \item A steering controller at the UPF that splits new connections over the sites by
+  that wait plus the network round trip, with the same code for every baseline.
+  \item Measurements on a real 5G core with real MCP traffic: the main comparison, an
+  ablation with exact run times and with argument-free means, the per-call connection
+  cost, and a load $\times$ skew sweep that shows where steering pays off
+  (Section~\ref{sec:results}).
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, align=center, font=\small, minimum height=8mm},
+  site/.style={draw, rounded corners=2pt, align=left, font=\small, text width=33mm, minimum height=13mm},
+  >={Stealth[length=2mm]}, node distance=6mm and 9mm]
+  \node[box, text width=21mm] (ue) {UE\\agent + MCP client};
+  \node[box, right=of ue] (gnb) {gNB};
+  \node[box, right=of gnb, text width=24mm] (upf) {UPF\\steering map:\\anycast $\to$ site};
+  \node[site, right=16mm of upf, yshift=17mm] (m1) {MEC-1, RTT 1.7\,ms\\replica: FIFO queue,\\2 workers, wait estimator};
+  \node[site, below=4mm of m1] (m2) {MEC-2, RTT 11.9\,ms\\replica (same code)};
+  \node[site, below=4mm of m2] (m3) {MEC-3, RTT 29.7\,ms\\replica (same code)};
+  \node[box, below=14mm of upf, text width=24mm] (ctl) {controller\\every 100\,ms};
+  \draw[->] (ue) -- node[above, font=\scriptsize] {call} (gnb);
+  \draw[->] (gnb) -- (upf);
+  \draw[->] (upf.east) -- (m1.west);
+  \draw[->] (upf.east) -- (m2.west);
+  \draw[->] (upf.east) -- (m3.west);
+  \node[draw, dotted, fit=(m1)(m2)(m3), inner sep=2mm] (sites) {};
+  \draw[->, dashed] (sites.south) |- node[pos=0.75, below, font=\scriptsize] {wait report of every site} (ctl.east);
+  \draw[->, dashed] (ctl) -- node[left, font=\scriptsize, align=right] {new split\\of new\\connections} (upf);
+\end{tikzpicture}
+\caption{Setup. Each MCP server has one anycast address. The UPF sends every new
+connection (one call) to one site by a split map. Each replica reads the arguments of
+its queued calls, predicts their run times and reports the wait for a new call; the
+controller turns the reports into the split of the next interval.}
+\label{fig:setup}
+\end{figure}
+
+\section{Background and related work}
+\todo{0.5--1 page. Terms in plain words: UE, UPF, MEC site, anycast, CATS, MCP over
+Streamable HTTP (stateless since the 2026-07-28 spec, so a per-call decision does not
+split a session).}
+
+\textbf{Steering by load.} IETF CATS \citep{cats_rfc,cats_metrics} picks an anycast copy by
+network distance and a server load metric: a request count, a utilization or an average.
+DONAR \citep{donar}, Taiji \citep{taiji}, Envoy load-aware locality \citep{envoy} and
+\citet{fan2018} split load across sites. We use this kind of split; our change is the
+signal.
+
+\textbf{Tool calls of agents.} DOME \citep{dome} predicts the delay of each MCP call and
+spreads calls over tool instances, but in an application dispatcher inside one LAN.
+EdgeAgent/WasmMCP \citep{edgeagent} places each call on device, edge or cloud from a
+profile, without load. 3GPP TR 26.870 \citep{tr26870} runs MCP sessions under emulated 5G
+conditions without a UPF or steering. \todo{agent benchmarks: ReAct \citep{react},
+$\tau$-bench \citep{taubench}; they treat a call as instant.}
+
+\textbf{Gap.} None of these ranks sites by a wait predicted from the arguments of the
+queued calls, and none measures MCP traffic through a real 5G UPF to several sites.
+
+\section{Method}
+\label{sec:method}
+\textbf{Run-time prediction.} For each call the replica builds features from the arguments
+only: the SQL query type, the tables and joins, the row estimate from \texttt{EXPLAIN},
+\texttt{LIMIT}, and the tool. A gradient-boosted tree model \citep{lightgbm} predicts the
+log run time. An online factor (moving average of measured / predicted run time) corrects
+the prediction for the current speed of the site. \todo{held-out $R^2$ table: by task 0.88
+on log run time, 0.54 in seconds; by template 0.62 / 0.10.}
+
+\textbf{Wait for a new call.} The replica knows the predicted remaining run time of each
+running call and the predicted run time of each queued call. It replays the FIFO queue on
+its $w$ workers (a heap of worker free times) and reports the time until a worker is free
+for a new call. A simpler formula, remaining work divided by $w$, is wrong for small $w$:
+one long call next to an idle worker gives no wait at all. \todo{one equation.}
+
+\textbf{Split.} Every 100\,ms the controller reads the latest report of each site and
+ignores reports older than 300\,ms. It estimates how many calls arrive in the next 200\,ms
+and assigns them to sites by water-filling on (reported wait + RTT), so that one stale view
+does not send a herd of calls to one site. The split becomes a map from a random bucket
+0--99 to a site in the UPF; every new connection draws one bucket.
+
+\textbf{Baselines.} B0 sends every call to the nearest site (plain anycast). B1 uses the
+number of calls in flight (CATS-style). B2 uses the same wait formula as our method with
+the mean run time of each tool, without the arguments. All policies use the same split,
+period and horizon; only the signal changes. The oracle uses the measured run time of
+each call (an upper bound for the predictor).
+
+\section{Testbed and workload}
+\label{sec:setup}
+\todo{0.5 page. 5G core free5GC v4.3.0 with one UPF, UERANSIM gNB and 30 UEs; three MEC
+sites with RTT 1.7 / 11.9 / 29.7\,ms (Table: RTT and one MCP call on a new connection);
+replicas: SQL tool on TPC-H SF10 (DuckDB, 2 workers) and a 5\,ms key-value tool. Workload:
+5,119 calls recorded from a Qwen3-8B agent on 50 analytics tasks (10 templates $\times$ 5
+parameter sets), replayed by 90 clients (3 agents per UE) at a set share of the measured
+capacity; local users take a set share of MEC-1. Say which traffic is live and which is
+replayed. Runs: 300\,s, first 60\,s dropped, the same seed offers the same calls to every
+policy.}
+
+\section{Results}
+\label{sec:results}
+
+\begin{table}[t]
+\centering
+\caption{Main setting: offered work 70\% of capacity, local users take 30\% of MEC-1.
+Means over runs; gains are paired by seed ($1-\text{policy}/\text{B1}$) with a bootstrap
+95\% CI over seeds. Short calls: run time below 50\,ms.}
+\label{tab:main}
+\small
+\begin{tabular}{lrrrrl}
+\toprule
+Policy & Runs & p50 (ms) & p95 (ms) & p95 short (ms) & p95 gain vs B1 \\
+\midrule
+B0 nearest & 3 & 2974 & 10158 & 9970 & $-312\%$ \\
+B1 fewest in flight & 10 & 71 & 2483 & 1897 & --- \\
+B2 per-tool mean & 10 & 72 & 2503 & 1905 & $-1.2\%$ [$-4.7$, 2.1] \\
+Ours & 10 & 73 & \textbf{2085} & \textbf{1503} & \textbf{16.1\%} [13.2, 19.5] \\
+Oracle run times & 10 & 75 & 2079 & 1466 & 16.5\% [13.4, 19.5] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Main comparison.} Table~\ref{tab:main}. Our method lowers p95 by 16.1\% compared
+with B1 and wins in all 10 runs. The gain comes from short calls (p95 $-20.2\%$): a lookup
+no longer lands behind a scan that B1 cannot see. The median is 2.5\% worse, because some
+calls travel to a farther site. \todo{p95 without any queue wait (latency minus wait) as
+the floor.}
+
+\textbf{What the gain comes from.} B2 uses the same wait formula without the arguments and
+does not beat B1, so the gain comes from reading the arguments. With exact run times the
+gain is 16.5\%, almost the same: here a better predictor would add little.
+
+\textbf{When steering pays off.} \todo{Figure: load 10--90\% $\times$ local-user share
+0/30/60\% at MEC-1, p50 and p95 per policy, crossover with B0 marked. Seed-1 reading:
+median crossover at about 23\% load with no local users, about 14\% with 30\%, below 10\%
+with 60\%; at 90\% load the policies converge.}
+
+\begin{table}[t]
+\centering
+\caption{Cost of one new connection per call: 200 key-value calls per cell from one UE
+through the UPF (p50).}
+\label{tab:conn}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Site & New connection (ms) & Kept-alive connection (ms) & Setup cost (ms) \\
+\midrule
+MEC-1 & 8.4 & 8.1 & 0.3 \\
+MEC-2 & 29.8 & 19.8 & 10.0 \\
+MEC-3 & 76.5 & 45.5 & 31.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Connection cost.} Table~\ref{tab:conn}. Steering per call needs one new connection
+per call, which costs one round trip. It is small next to the waits above, but not next to
+a 5\,ms lookup at low load.
+
+\textbf{Failure cases.} \todo{from the sweep: at low load the method and B1 tie on p95 and
+sending a short call 30\,ms away is slower than waiting; at 90\% load every site is busy
+and moving a call does not help; cells where the method loses to B1.}
+
+\section{Limitations}
+\todo{A gateway at the MEC that reads requests (L7) could also steer; replayed rather than
+live agents create the load; one host runs all sites, so long scans slow down when all
+sites are busy; one SQL tool and one key-value tool.}
+
+\section{Conclusion}
+\todo{3 sentences.}
+
+\section*{Use of AI}
+AI assistants were used to search for papers by keyword, to review the feasibility of the
+plan, and to suggest the tech stack and code.
+
+\bibliographystyle{\mybibstyle}
+\bibliography{refs}
+\end{document}
