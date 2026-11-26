@@ -50,13 +50,33 @@ $\times$ skew crossover: where steering pays off and where the nearest site is e
 \end{abstract}
 
 \section{Introduction}
-\todo{1 page. (1) Agents call tools in chains: 10--30 dependent calls per task, so the
-slowest call decides the task time; with 20 calls, $1-0.95^{20}\approx 64\%$ of tasks
-meet at least one call above the per-call p95, so we report p95 rather than the mean.
-(2) Run times of one tool spread over three orders of magnitude (TraceLab: median 0.3\,s,
-p99 3.6\,min). (3) The network can steer, but sees only addresses: call arguments are
-encrypted. (4) Our idea: the replica reads its own queue and reports a wait; the network
-uses the wait. (5) Contributions, with the measured numbers.}
+An AI agent finishes a task with a chain of tool calls: it lists the tables, reads a schema,
+runs a query, looks up a value, runs another query. Each call waits for the one before, so
+the task time is the sum of the call latencies, and one slow call delays the whole task.
+A task of $n$ calls meets at least one call slower than the per-call 95th percentile (p95)
+with probability $1-0.95^{n}$: 19\% for the 4 calls of a median task in our recording, 64\%
+for a 20-call task. We therefore report p95, not the mean.
+
+The Model Context Protocol (MCP) \citep{mcp_spec} is the common way for an agent to call a
+tool server. When the agent runs on a phone, the tool servers can sit at edge sites next to
+the 5G gateway (multi-access edge computing, MEC), and 3GPP already studies MCP traffic over
+5G \citep{tr26870}. If a tool has a copy (replica) at several sites, the mobile network can
+choose the site for every call.
+
+Which site is best depends on the work already queued there, and the work of one tool call
+spreads widely. In our recording, one SQL tool runs from 0.3\,ms to 18\,s: the median is
+2.9\,ms and the 99th percentile 2.1\,s. TraceLab \citep{tracelab} reports a similar spread
+for real agents (median 0.3\,s, 99th percentile 3.6\,min). Steering by load, as in IETF CATS
+\citep{cats_rfc}, counts calls or measures utilization: two calls in flight look the same
+whether they end in 5\,ms or in 5\,s, so a short lookup can wait behind two scans. The
+network cannot read the call to know better, because the call is encrypted.
+
+The replica can read it. In our method, each replica predicts the run time of every call
+from its arguments, replays its queue to find how long a new call would wait for a free
+worker, and reports this wait. A controller at the gateway (UPF) splits the new connections
+over the sites by wait plus network round trip. On a 5G testbed this lowers the p95 call
+latency by 16.1\% compared with least-load steering at 70\% load. \todo{one sentence from
+the sweep: where it wins, where it loses.}
 
 Contributions:
 \begin{itemize}
@@ -101,9 +121,13 @@ controller turns the reports into the split of the next interval.}
 \end{figure}
 
 \section{Background and related work}
-\todo{0.5--1 page. Terms in plain words: UE, UPF, MEC site, anycast, CATS, MCP over
-Streamable HTTP (stateless since the 2026-07-28 spec, so a per-call decision does not
-split a session).}
+\textbf{Terms.} A UE is the phone or device. The gNB is the base station. The UPF is
+the gateway between the 5G network and the data network; every packet of the UE passes it,
+so it can send a connection to one site or another. A MEC site is a small data center
+close to the UPF. Anycast means one address served by several replicas; the network picks
+the replica. MCP over Streamable HTTP sends each tool call as one HTTP request; in the
+stateless mode of the 2026-07-28 specification \citep{mcp_spec} a call does not depend on
+earlier calls to the same server, so each call can go to a different site.
 
 \textbf{Steering by load.} IETF CATS \citep{cats_rfc,cats_metrics} picks an anycast copy by
 network distance and a server load metric: a request count, a utilization or an average.
@@ -115,8 +139,9 @@ signal.
 spreads calls over tool instances, but in an application dispatcher inside one LAN.
 EdgeAgent/WasmMCP \citep{edgeagent} places each call on device, edge or cloud from a
 profile, without load. 3GPP TR 26.870 \citep{tr26870} runs MCP sessions under emulated 5G
-conditions without a UPF or steering. \todo{agent benchmarks: ReAct \citep{react},
-$\tau$-bench \citep{taubench}; they treat a call as instant.}
+conditions without a UPF or steering. Agent methods and
+benchmarks such as ReAct \citep{react} and $\tau$-bench \citep{taubench} study which tool
+to call, and treat the call itself as instant.
 
 \textbf{Gap.} None of these ranks sites by a wait predicted from the arguments of the
 queued calls, and none measures MCP traffic through a real 5G UPF to several sites.
@@ -150,14 +175,33 @@ each call (an upper bound for the predictor).
 
 \section{Testbed and workload}
 \label{sec:setup}
-\todo{0.5 page. 5G core free5GC v4.3.0 with one UPF, UERANSIM gNB and 30 UEs; three MEC
-sites with RTT 1.7 / 11.9 / 29.7\,ms (Table: RTT and one MCP call on a new connection);
-replicas: SQL tool on TPC-H SF10 (DuckDB, 2 workers) and a 5\,ms key-value tool. Workload:
-5,119 calls recorded from a Qwen3-8B agent on 50 analytics tasks (10 templates $\times$ 5
-parameter sets), replayed by 90 clients (3 agents per UE) at a set share of the measured
-capacity; local users take a set share of MEC-1. Say which traffic is live and which is
-replayed. Runs: 300\,s, first 60\,s dropped, the same seed offers the same calls to every
-policy.}
+\textbf{Network.} One host runs a free5GC v4.3.0 5G core with one UPF, a UERANSIM base
+station and 30 emulated UEs. Three MEC sites are virtual machines, each with two physical
+cores, behind the UPF. Added delay places them at a round trip of 1.7, 11.9 and 29.7\,ms
+from a UE (measured with ping through the UPF), like a site at the gateway, one in the same
+city and one in a regional data center. The steering map is an nftables rule in the UPF.
+
+\textbf{Tools.} Each site runs the same two MCP servers: an SQL tool on TPC-H data of scale
+factor 10 (DuckDB, two workers, first in first out) and a key-value tool (5\,ms per call).
+The replicas report their state every 100\,ms.
+
+\textbf{Workload.} We recorded a Qwen3-8B agent solving 50 analytics tasks (10 templates
+$\times$ 5 parameter sets) against the SQL and key-value tools: 1,100 task runs and 5,119
+calls with their arguments and the time the model spent between calls. The predictor is
+trained on the tasks of one split; the experiments replay only the held-out tasks. In a
+run, 90 clients (three per UE) replay these chains: each sends the next call after the
+previous one returns and after the recorded model time (scaled by 0.2), as a real MCP call
+on a new connection to the anycast address. Only the language model is replaced by its
+recording; the calls, the 5G user plane and the tool servers are live. A gap between tasks
+sets the offered work to a share (the load) of the measured capacity of the three sites,
+4.3 workers. Local users of MEC-1 send long SQL calls straight to MEC-1 (Poisson arrivals)
+and take a set share of its capacity (the skew); the steering does not see them except
+through the reports of MEC-1.
+
+\textbf{Runs.} The main setting is 70\% load with local users taking 30\% of MEC-1; each
+run lasts 300\,s and the first 60\,s are dropped. A seed fixes the calls offered, so every
+policy sees the same calls; we pair runs by seed. The sweep uses 240\,s runs at loads 10 to
+90\% and skews 0, 30 and 60\%, with three seeds per cell.
 
 \section{Results}
 \label{sec:results}
@@ -223,9 +267,16 @@ sending a short call 30\,ms away is slower than waiting; at 90\% load every site
 and moving a call does not help; cells where the method loses to B1.}
 
 \section{Limitations}
-\todo{A gateway at the MEC that reads requests (L7) could also steer; replayed rather than
-live agents create the load; one host runs all sites, so long scans slow down when all
-sites are busy; one SQL tool and one key-value tool.}
+\textbf{One host.} All sites share one host. When all three are busy, long scans run
+about 1.4 times slower because the sites share memory bandwidth; separate machines would
+not slow each other. \textbf{Replayed agents.} The language model is replaced by its
+recorded chains, so the load does not react to latency as a live agent would (a slower
+call does not change the next call). \textbf{Two tools.} One SQL tool and one key-value
+tool; tools whose run time cannot be read from the arguments (for example a web fetch)
+give the predictor less to work with. \textbf{Other designs.} A request-reading (L7)
+gateway at each site could also route calls by their arguments; we steer at the UPF so
+that the choice of site also covers the network path, and we do not compare with such a
+gateway.
 
 \section{Conclusion}
 \todo{3 sentences.}

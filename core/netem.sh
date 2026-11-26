@@ -3,6 +3,7 @@
 # MEC-1 same site as the UPF (no added delay), MEC-2 nearby (RTT 10 ms),
 # MEC-3 far (RTT 28 ms). Re-run after a VM restart (tap names change).
 set -eu
+export INCUS_PROJECT=default   # the MEC VMs live in the default project, whatever the shell's current one
 declare -A HALF=([1]=0 [2]=5 [3]=14)
 for n in 1 2 3; do
   tap=$(incus config get mec$n volatile.eth0.host_name)

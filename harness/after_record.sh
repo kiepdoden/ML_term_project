@@ -4,6 +4,7 @@
 # idle), and with --install put B2 means + oracle table on every replica.
 # Usage: harness/after_record.sh <chains.jsonl> <out_dir> [--install]
 set -eu
+export INCUS_PROJECT=default   # the MEC VMs live in the default project, whatever the shell's current one
 CHAINS=$1; OUT=$2; INSTALL=${3:-}
 cd ~/mcp_steer/repo
 mkdir -p "$OUT/logs" "$OUT/check1"

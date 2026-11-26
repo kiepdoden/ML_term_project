@@ -2,6 +2,7 @@
 # One run of one policy: controller + replay, then pull the replica logs.
 # Usage: harness/run_policy.sh <policy> <run_dir> <chains.jsonl> [replay args...]
 set -eu
+export INCUS_PROJECT=default   # the MEC VMs live in the default project, whatever the shell's current one
 POLICY=$1; DIR=$2; CHAINS=$3; shift 3
 cd ~/mcp_steer/repo
 mkdir -p "$DIR"

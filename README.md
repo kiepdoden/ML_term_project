@@ -45,7 +45,7 @@ steering pays off and where B0 is enough.
 - **5G core:** free5GC v4.3.0 (free5gc-compose) + UERANSIM gNB and 30 UEs in docker,
   CPUs 0,1,8,9. gtp5g must be v0.10.2 (UPF v4.3.0 rejects 0.10.3). Start the SMF after
   the UPF. UE config: one PDU session, NSSAI 1/010203 only (`core/uecfg.yaml`).
-- **MEC sites:** incus VMs mec1..mec3 (4 vCPU = 2 physical cores, 8 GiB each), bridges
+- **MEC sites:** incus VMs mec1..mec3 (4 vCPU = 2 physical cores, 16 GiB each), bridges
   mecNbr 10.201.N.0/24, replica at 10.201.N.10. Distance from the UPF set with netem
   (`core/netem.sh`); measured ICMP RTT from a UE 1.65 / 11.85 / 29.7 ms
   (`results/rtt_table.md`).
