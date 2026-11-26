@@ -82,11 +82,13 @@ for j, k in enumerate(skews):
         ax = axes[i][j]
         series = {}
         for pol, (name, col, mk) in STYLE.items():
-            if not all(pol in c["policies"] for c in cs):
+            have = [(x, c) for x, c in zip(xs, cs) if pol in c["policies"]]
+            if not have:          # method v2 was run only in some cells
                 continue
-            ys = [scale * c["policies"][pol][m] for c in cs]
-            series[pol] = ys
-            ax.plot(xs, ys, color=col, lw=2, marker=mk, ms=6, mec="white", mew=1.2,
+            ys = [scale * c["policies"][pol][m] for _, c in have]
+            if len(have) == len(cs):
+                series[pol] = ys
+            ax.plot([x for x, _ in have], ys, color=col, lw=2, marker=mk, ms=6, mec="white", mew=1.2,
                     label=name, zorder=3 if pol == "method" else 2)
         if "method" in series and "b0" in series:
             x = first_below(xs, series["method"], series["b0"])
@@ -101,16 +103,17 @@ for j, k in enumerate(skews):
     for pol in ("method", "method2", "b2"):
         name, col, mk = STYLE[pol]
         key = f"{pol}_vs_b1"
-        if not all(key in c["gain"] for c in cs):
+        have = [(x, c) for x, c in zip(xs, cs) if key in c["gain"]]
+        if not have:
             continue
-        g = [100 * c["gain"][key]["p95"]["mean"] for c in cs]
-        lo = [g[n] - 100 * c["gain"][key]["p95"]["ci"][0] for n, c in enumerate(cs)]
-        hi = [100 * c["gain"][key]["p95"]["ci"][1] - g[n] for n, c in enumerate(cs)]
+        g = [100 * c["gain"][key]["p95"]["mean"] for _, c in have]
+        lo = [g[n] - 100 * c["gain"][key]["p95"]["ci"][0] for n, (_, c) in enumerate(have)]
+        hi = [100 * c["gain"][key]["p95"]["ci"][1] - g[n] for n, (_, c) in enumerate(have)]
         dx = {"method": -1.5, "method2": 0.0, "b2": 1.5}[pol]   # side by side, bars apart
-        ax.errorbar([x + dx for x in xs], g, yerr=[lo, hi], color=col, lw=2, marker=mk, ms=6,
+        ax.errorbar([x + dx for x, _ in have], g, yerr=[lo, hi], color=col, lw=2, marker=mk, ms=6,
                     mec="white", mew=1.2, elinewidth=1, capsize=2, label=name,
                     zorder=3 if pol == "method" else 2)
-        if pol == "method":
+        if pol == "method" and len(have) == len(cs):
             x = stays_above_zero(xs, g)
             if x is not None:
                 mark(ax, x, "method ahead of B1")
@@ -122,11 +125,13 @@ for j, k in enumerate(skews):
 axes[0][0].set_ylabel("median, all calls (ms)")
 axes[1][0].set_ylabel("p95, all calls (s)")
 axes[2][0].set_ylabel("p95 gain over B1 (%)")
+GAIN_FLOOR = -80                  # one wide CI (down to -130%) would flatten the rest
+axes[2][0].set_ylim(bottom=GAIN_FLOOR)
 handles, labels = axes[0][0].get_legend_handles_labels()
 fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False,
            bbox_to_anchor=(0.5, 1.0), fontsize=9)
 fig.text(0.5, 0.005, f"Mean over seeds {', '.join(map(str, seeds))}; gain bars: 95% bootstrap CI "
-         "over seeds, paired by seed.", ha="center", va="bottom", fontsize=7.5, color=MUTED)
+         f"over seeds, paired by seed, cut at {GAIN_FLOOR}%.", ha="center", va="bottom", fontsize=7.5, color=MUTED)
 fig.tight_layout(rect=(0, 0.02, 1, 0.95))
 fig.savefig(out, dpi=200)
 print("wrote", out)
