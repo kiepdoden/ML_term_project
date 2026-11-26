@@ -2,10 +2,19 @@
 % With iclr2027_conference.sty in this folder the ICLR style is used; without it
 % the same text compiles as a plain article, so the skeleton can be checked now.
 \documentclass{article}
-\IfFileExists{iclr2027_conference.sty}{%
-  \usepackage{iclr2027_conference,times}\newcommand{\mybibstyle}{iclr2027_conference}}{%
-  \usepackage{times}\usepackage[margin=1in]{geometry}\usepackage[round]{natbib}%
-  \newcommand{\mybibstyle}{plainnat}}
+% Course copy: author name shown, course header. Set \coursecopyfalse for an
+% anonymous ICLR submission (line numbers, "Under review" header).
+\newif\ifcoursecopy \coursecopytrue
+\newif\ificlrstyle
+\IfFileExists{iclr2027_conference.sty}{\iclrstyletrue}{\iclrstylefalse}
+\ificlrstyle
+  \usepackage{iclr2027_conference,times}
+  \ifcoursecopy\iclrfinalcopy\fi
+  \newcommand{\mybibstyle}{iclr2027_conference}
+\else
+  \usepackage{times}\usepackage[margin=1in]{geometry}\usepackage[round]{natbib}
+  \newcommand{\mybibstyle}{plainnat}
+\fi
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -17,10 +26,12 @@
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
 
 \title{Wait-Aware Steering of MCP Tool Calls\\across 5G MEC Sites}
-\author{Bui Duong Kham\\Soongsil University\\\texttt{1102549018}}
+\author{Bui Duong Kham (1102549018)\\
+Graduate School of Information and Communication Technology, Soongsil University}
 
 \begin{document}
 \maketitle
+\ificlrstyle\ifcoursecopy\lhead{Term project, Machine Learning and AI, Fall 2026}\fi\fi
 
 \begin{abstract}
 An AI agent on a phone finishes one task with a chain of tool calls, and operators start
@@ -79,7 +90,7 @@ Contributions:
   \draw[->] (upf.east) -- (m2.west);
   \draw[->] (upf.east) -- (m3.west);
   \node[draw, dotted, fit=(m1)(m2)(m3), inner sep=2mm] (sites) {};
-  \draw[->, dashed] (sites.south) |- node[pos=0.75, below, font=\scriptsize] {wait report of every site} (ctl.east);
+  \draw[->, dashed] (sites.south) |- node[pos=0.75, below=2pt, font=\scriptsize] {wait report of every site} (ctl.east);
   \draw[->, dashed] (ctl) -- node[left, font=\scriptsize, align=right] {new split\\of new\\connections} (upf);
 \end{tikzpicture}
 \caption{Setup. Each MCP server has one anycast address. The UPF sends every new
