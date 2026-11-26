@@ -10,10 +10,17 @@ Wait estimates sent in each status datagram:
   wait_b2_ms        per-tool mean run time, no arguments        (B2)
   wait_pred_ms      per-call prediction from the arguments      (method)
   wait_oracle_ms    run time measured offline for that call     (ablation)
+  wait_pred2_ms     as wait_pred_ms, plus the work that local users are
+                    expected to bring in the next `horizon` s     (method v2)
 Each one is the time until a worker is free for a new call, replaying the
 FIFO queue on the workers with that estimator's run times.
+
+Local users are callers that the UPF does not steer: they address the replica
+itself, not the anycast address, so the HTTP Host header tells them apart
+(the UPF rewrites the destination address, not the Host header).
 """
 import asyncio
+import collections
 import hashlib
 import heapq
 import json
@@ -31,9 +38,9 @@ def call_key(tool, args):
 
 class Job:
     __slots__ = ("id", "tool", "args", "key", "fn", "fut", "t_arr", "t_start",
-                 "worker", "call_id", "inflight_at_arr", "pred_s")
+                 "worker", "call_id", "inflight_at_arr", "pred_s", "local")
 
-    def __init__(self, tool, args, fn, call_id):
+    def __init__(self, tool, args, fn, call_id, local=False):
         self.id = uuid.uuid4().hex[:12]
         self.tool = tool
         self.args = args
@@ -46,6 +53,7 @@ class Job:
         self.call_id = call_id
         self.inflight_at_arr = 0
         self.pred_s = None
+        self.local = local
 
 
 class Estimators:
@@ -97,6 +105,11 @@ class Pool:
         self.arrived = 0
         self.arr_work = {"b2": 0.0, "pred": 0.0, "oracle": 0.0}
         self.calib_alpha = float(os.environ.get("CALIB_ALPHA", "0.1"))
+        # method v2: work brought by local (unsteered) users, as a rate over
+        # the last `local_win` s, expected over the controller's horizon
+        self.local_arr = collections.deque()          # (arrival time, est. work s)
+        self.local_win = float(os.environ.get("LOCAL_WIN", "10"))
+        self.horizon = float(os.environ.get("STEER_HORIZON", "0.2"))
         self.work_cpus = None
         self.site = site
         self.svc = svc
@@ -139,8 +152,8 @@ class Pool:
         for i in range(self.n):
             asyncio.create_task(self._worker(i))
 
-    async def submit(self, tool, args, fn, call_id=None):
-        job = Job(tool, args, fn, call_id)
+    async def submit(self, tool, args, fn, call_id=None, local=False):
+        job = Job(tool, args, fn, call_id, local)
         job.inflight_at_arr = len(self.queued) + len(self.running)
         if self.est.model is not None:
             # predict on arrival, for every call and every policy, so all
@@ -152,6 +165,8 @@ class Pool:
         self.arr_work["b2"] += self.calib["b2"] * self.est.b2_s(job)
         self.arr_work["pred"] += self.calib["pred"] * self.est.pred_s(job)
         self.arr_work["oracle"] += self.calib["oracle"] * self.est.oracle_s(job)
+        if local:
+            self.local_arr.append((job.t_arr, self.calib["pred"] * self.est.pred_s(job)))
         self.queued[job.id] = job
         await self.q.put(job)
         return await job.fut
@@ -185,7 +200,7 @@ class Pool:
                 "t_end": t_end, "wait_s": job.t_start - job.t_arr,
                 "run_s": t_end - job.t_start, "worker": i,
                 "inflight_at_arr": job.inflight_at_arr, "err": err,
-                "pred_s": job.pred_s,
+                "pred_s": job.pred_s, "local": job.local,
             }) + "\n")
             if not job.fut.done():
                 if err:
@@ -213,7 +228,15 @@ class Pool:
                 r = min(5.0, max(0.2, run_s / e))
                 self.calib[name] = (1 - self.calib_alpha) * self.calib[name] + self.calib_alpha * r
 
-    def _wait_ms(self, est_fn, name):
+    def local_rate(self):
+        """Estimated work (s) that local users bring per second, over the last
+        `local_win` seconds."""
+        cut = time.time() - self.local_win
+        while self.local_arr and self.local_arr[0][0] < cut:
+            self.local_arr.popleft()
+        return sum(w for _, w in self.local_arr) / self.local_win
+
+    def _wait_ms(self, est_fn, name, ahead_s=0.0):
         """How long a NEW call would wait here: replay the FIFO queue on the
         workers. Each worker is free after the remaining time of its running
         call (0 if idle); queued calls take the earliest free worker in order;
@@ -221,7 +244,9 @@ class Pool:
         work / workers, the fluid view, is wrong with two workers: one long
         call plus one idle worker means no wait at all.) A running call that
         has outlived its estimate is not counted as done: run times are
-        heavy-tailed, so its expected remaining time grows with its age."""
+        heavy-tailed, so its expected remaining time grows with its age.
+        `ahead_s`: expected work that arrives before the new call (method v2:
+        local users over the horizon), queued last, as one call."""
         now = time.time()
         k = self.calib[name]
         free = [max(k * est_fn(j) - (now - j.t_start), self.resid_frac * (now - j.t_start))
@@ -230,6 +255,8 @@ class Pool:
         heapq.heapify(free)
         for j in self.queued.values():               # dicts keep arrival order
             heapq.heappush(free, heapq.heappop(free) + k * est_fn(j))
+        if ahead_s > 0:
+            heapq.heappush(free, heapq.heappop(free) + ahead_s)
         return 1000.0 * free[0]
 
     def status(self):
@@ -242,6 +269,9 @@ class Pool:
             "wait_b2_ms": round(self._wait_ms(self.est.b2_s, "b2"), 3),
             "wait_pred_ms": round(self._wait_ms(self.est.pred_s, "pred"), 3),
             "wait_oracle_ms": round(self._wait_ms(self.est.oracle_s, "oracle"), 3),
+            "wait_pred2_ms": round(self._wait_ms(self.est.pred_s, "pred",
+                                                 self.local_rate() * self.horizon), 3),
+            "local_rate": round(self.local_rate(), 4),
             "calib": {k: round(v, 3) for k, v in self.calib.items()},
             "arrived": self.arrived,
             "arr_work_s": {k: round(v, 4) for k, v in self.arr_work.items()},
@@ -277,6 +307,16 @@ def quiet_mcp_logging():
         lg.propagate = False
     logging.getLogger().handlers[:] = [logging.StreamHandler()]
     logging.getLogger().setLevel(logging.WARNING)
+
+
+ANYCAST_PREFIX = os.environ.get("ANYCAST_PREFIX", "10.200.0.")
+
+
+def is_local(ctx):
+    """True for a caller that addressed this replica directly (a local user),
+    False for a call that came to the anycast address (steered by the UPF)."""
+    host = header(ctx, "host")
+    return bool(host) and not host.startswith(ANYCAST_PREFIX)
 
 
 def header(ctx, name):

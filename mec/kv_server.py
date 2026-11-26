@@ -12,7 +12,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mcpsite import Estimators, Pool, header, quiet_mcp_logging
+from mcpsite import Estimators, Pool, header, is_local, quiet_mcp_logging
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--site", default=os.environ.get("SITE", "mec1"))
@@ -47,7 +47,8 @@ def _get(_, a):
 @mcp.tool()
 async def kv_get(key: str, ctx: Context) -> dict:
     """Get one record by key, e.g. 'customer:42' or 'supplier:7'."""
-    return await pool.submit("kv_get", {"key": key}, _get, header(ctx, "x-call-id"))
+    return await pool.submit("kv_get", {"key": key}, _get, header(ctx, "x-call-id"),
+                             is_local(ctx))
 
 
 @mcp.custom_route("/status", methods=["GET"])

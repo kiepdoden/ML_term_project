@@ -12,6 +12,8 @@ Policies (same code, only the signal changes):
   b1      in-flight call count, ties to the nearest         (CATS-style)
   b2      wait from per-tool mean run time + k x RTT        (no arguments)
   method  wait predicted from the arguments + k x RTT
+  method2 as method, plus the work local (unsteered) users of each site are
+          expected to bring in the next `horizon` s               (method v2)
   oracle  wait from the recorded run time + k x RTT         (ablation)
 Split:
   waterfill (default)  give the calls expected in the next `horizon` seconds
@@ -35,11 +37,12 @@ import time
 SITES = ["mec1", "mec2", "mec3"]          # ordered nearest first
 REPLICA = {"mec1": "10.201.1.10", "mec2": "10.201.2.10", "mec3": "10.201.3.10"}
 SVC = ["sql", "kv"]
-WAIT_FIELD = {"b2": "wait_b2_ms", "method": "wait_pred_ms", "oracle": "wait_oracle_ms"}
-WORK_FIELD = {"b2": "b2", "method": "pred", "oracle": "oracle"}
+WAIT_FIELD = {"b2": "wait_b2_ms", "method": "wait_pred_ms", "method2": "wait_pred2_ms",
+              "oracle": "wait_oracle_ms"}
+WORK_FIELD = {"b2": "b2", "method": "pred", "method2": "pred", "oracle": "oracle"}
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--policy", choices=["b0", "b1", "b2", "method", "oracle"], required=True)
+ap.add_argument("--policy", choices=["b0", "b1", "b2", "method", "method2", "oracle"], required=True)
 ap.add_argument("--split", choices=["waterfill", "argmin"], default="waterfill")
 ap.add_argument("--period", type=float, default=0.1)
 ap.add_argument("--horizon", type=float, default=0.2,
@@ -175,7 +178,8 @@ while True:
     if now - last_snap >= 1.0:               # one snapshot per second
         last_snap = now
         snap = {svc: {s: {k: st.get(k) for k in ("inflight", "wait_b2_ms", "wait_pred_ms",
-                                                  "wait_oracle_ms", "calib")}
+                                                  "wait_pred2_ms", "wait_oracle_ms",
+                                                  "local_rate", "calib")}
                       | {"age_ms": round(1000 * (now - t), 1)}
                       for s, (st, t) in latest.get(svc, {}).items()} for svc in SVC}
         log.write(json.dumps({"ts": now, "snapshot": snap,

@@ -65,7 +65,7 @@ for (L, K), pols in sorted(cells.items()):
         s["sites"] = {x: sum(r["sites"].get(x, 0) for r in rs.values()) / len(rs)
                       for x in ("mec1", "mec2", "mec3")}
         row["policies"][pol] = s
-    for ref in ("b0", "b1"):
+    for ref in ("b0", "b1", "method"):
         for pol, rs in pols.items():
             if pol == ref or ref not in pols:
                 continue

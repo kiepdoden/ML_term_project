@@ -24,6 +24,7 @@ cells = json.load(open(src))["cells"]
 # categorical slots 1-4 of the reference palette, fixed per entity
 STYLE = {
     "method": ("Method v1", "#2a78d6", "o"),
+    "method2": ("Method v2", "#e87ba4", "P"),
     "b1": ("B1 fewest in flight", "#eb6834", "s"),
     "b2": ("B2 per-tool mean", "#1baf7a", "^"),
     "b0": ("B0 nearest", "#eda100", "D"),
@@ -97,7 +98,7 @@ for j, k in enumerate(skews):
     # row 3: paired gain over B1
     ax = axes[2][j]
     ax.axhline(0, color=MUTED, lw=1, zorder=1)
-    for pol in ("method", "b2"):
+    for pol in ("method", "method2", "b2"):
         name, col, mk = STYLE[pol]
         key = f"{pol}_vs_b1"
         if not all(key in c["gain"] for c in cs):
@@ -105,7 +106,7 @@ for j, k in enumerate(skews):
         g = [100 * c["gain"][key]["p95"]["mean"] for c in cs]
         lo = [g[n] - 100 * c["gain"][key]["p95"]["ci"][0] for n, c in enumerate(cs)]
         hi = [100 * c["gain"][key]["p95"]["ci"][1] - g[n] for n, c in enumerate(cs)]
-        dx = -1.2 if pol == "method" else 1.2          # side by side, bars do not overlap
+        dx = {"method": -1.5, "method2": 0.0, "b2": 1.5}[pol]   # side by side, bars apart
         ax.errorbar([x + dx for x in xs], g, yerr=[lo, hi], color=col, lw=2, marker=mk, ms=6,
                     mec="white", mew=1.2, elinewidth=1, capsize=2, label=name,
                     zorder=3 if pol == "method" else 2)

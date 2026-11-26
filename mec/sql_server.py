@@ -22,7 +22,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mcpsite import Estimators, Pool, header, quiet_mcp_logging
+from mcpsite import Estimators, Pool, header, is_local, quiet_mcp_logging
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--site", default=os.environ.get("SITE", "mec1"))
@@ -131,14 +131,15 @@ def _run_sql(con, a):
 @mcp.tool()
 async def list_tables(ctx: Context) -> dict:
     """List the TPC-H tables and their row counts."""
-    return await pool.submit("list_tables", {}, _list_tables, header(ctx, "x-call-id"))
+    return await pool.submit("list_tables", {}, _list_tables, header(ctx, "x-call-id"),
+                             is_local(ctx))
 
 
 @mcp.tool()
 async def describe_table(table: str, ctx: Context) -> dict:
     """Show the columns and types of one TPC-H table."""
     return await pool.submit("describe_table", {"table": table}, _describe,
-                             header(ctx, "x-call-id"))
+                             header(ctx, "x-call-id"), is_local(ctx))
 
 
 @mcp.tool()
@@ -146,7 +147,7 @@ async def run_sql(query: str, ctx: Context) -> dict:
     """Run one read-only SQL query (DuckDB dialect) on the TPC-H database.
     Returns at most 50 rows."""
     return await pool.submit("run_sql", {"query": query}, _run_sql,
-                             header(ctx, "x-call-id"))
+                             header(ctx, "x-call-id"), is_local(ctx))
 
 
 @mcp.custom_route("/status", methods=["GET"])
