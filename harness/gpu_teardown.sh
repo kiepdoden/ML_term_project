@@ -1,10 +1,12 @@
 #!/bin/bash
-# GPU machine of this project only: kham-mcp-steer-gpu (g6.xlarge, 1x L4).
-# Never touch the other kham-* machines (other projects).
+# GPU machine for the agent recording (one g6.xlarge, 1x L4), set in harness/gpu.env:
+#   GPU_INSTANCE_ID=i-...   GPU_KEY=~/.ssh/<key>.pem   (gpu.env is not in git)
+# Only this machine is started and stopped.
 #   harness/gpu_teardown.sh up    start it, start vLLM, open the tunnel on :18000
 #   harness/gpu_teardown.sh down  close the tunnel, stop the machine
 set -u
-R=ap-northeast-2; ID=i-07741871716f7a82d; KEY=~/.ssh/kham-llm.pem
+[ -f "$(dirname "$0")/gpu.env" ] && . "$(dirname "$0")/gpu.env"
+R=${GPU_REGION:-ap-northeast-2}; ID=${GPU_INSTANCE_ID:?set GPU_INSTANCE_ID in harness/gpu.env}; KEY=${GPU_KEY:?set GPU_KEY}
 ip() { aws ec2 describe-instances --region $R --instance-ids $ID \
          --query "Reservations[0].Instances[0].PublicIpAddress" --output text; }
 case "${1:-}" in
