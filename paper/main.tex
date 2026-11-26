@@ -152,14 +152,43 @@ queued calls, and none measures MCP traffic through a real 5G UPF to several sit
 only: the SQL query type, the tables and joins, the row estimate from \texttt{EXPLAIN},
 \texttt{LIMIT}, and the tool. A gradient-boosted tree model \citep{lightgbm} predicts the
 log run time. An online factor (moving average of measured / predicted run time) corrects
-the prediction for the current speed of the site. \todo{held-out $R^2$ table: by task 0.88
-on log run time, 0.54 in seconds; by template 0.62 / 0.10.}
+the prediction for the current speed of the site. Table~\ref{tab:r2} gives the held-out
+accuracy. On tasks the model has not seen, it explains 88\% of the variance of the log run
+time; on whole templates it has not seen, 62\%. In seconds the numbers are lower (0.54 and
+0.10), because a few very long scans dominate the squared error; for steering, the order
+of magnitude matters most. The per-tool mean of B2 explains nothing ($R^2\le 0$).
+
+\begin{table}[t]
+\centering
+\caption{Run-time prediction for \texttt{run\_sql} (3,336 calls), held out by task (unseen
+parameter sets) or by template (unseen query shapes). B2: per-tool mean run time.}
+\label{tab:r2}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Held out by & $R^2$ log time & $R^2$ seconds & MAE (ms) & B2 MAE (ms) \\
+\midrule
+task & 0.88 & 0.54 & 46 & 209 \\
+template & 0.62 & 0.10 & 124 & 214 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \textbf{Wait for a new call.} The replica knows the predicted remaining run time of each
 running call and the predicted run time of each queued call. It replays the FIFO queue on
 its $w$ workers (a heap of worker free times) and reports the time until a worker is free
 for a new call. A simpler formula, remaining work divided by $w$, is wrong for small $w$:
-one long call next to an idle worker gives no wait at all. \todo{one equation.}
+one long call next to an idle worker gives no wait at all. Let $c$ be the calibration
+factor and $\hat r$ a predicted run time. A worker running a call that started $a$ seconds
+ago is free after
+\begin{equation}
+f = \max\bigl(c\,\hat r - a,\; \rho\, a\bigr), \qquad \rho = 0.5,
+\end{equation}
+and an idle worker has $f=0$. The second term keeps a call that has outlived its
+prediction counted as busy: run times are heavy-tailed, so the longer a call has run, the
+longer it is likely to run. Each queued call, in arrival order, takes the worker with the
+smallest $f$ and adds $c\,\hat r$ to it. The reported wait is $W=\min_j f_j$ after all
+queued calls are placed.
 
 \textbf{Split.} Every 100\,ms the controller reads the latest report of each site and
 ignores reports older than 300\,ms. It estimates how many calls arrive in the next 200\,ms
