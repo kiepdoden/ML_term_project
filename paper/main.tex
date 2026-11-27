@@ -45,8 +45,10 @@ at the 5G user-plane gateway (UPF). On a free5GC testbed with 30 emulated phones
 replicas at three edge sites, this lowers the 95th-percentile call latency by 16.1\%
 compared with least-load steering (95\% CI 13.2--19.5\%, 10 paired runs), and by 20\%
 for short calls. A baseline with the same wait formula but a per-tool mean run time gains
-nothing, so the gain comes from reading the arguments. \todo{one sentence on the load
-$\times$ skew crossover: where steering pays off and where the nearest site is enough.}
+nothing, so the gain comes from reading the arguments. A sweep over load and the share of
+local users at the nearest site shows the method ahead from about 30--40\% load, and
+behind at low load when local users share the nearest site; a variant that also counts
+the expected work of local users removes this loss but gains less at 70\% load (11.4\%).
 \end{abstract}
 
 \section{Introduction}
@@ -75,8 +77,10 @@ The replica can read it. In our method, each replica predicts the run time of ev
 from its arguments, replays its queue to find how long a new call would wait for a free
 worker, and reports this wait. A controller at the gateway (UPF) splits the new connections
 over the sites by wait plus network round trip. On a 5G testbed this lowers the p95 call
-latency by 16.1\% compared with least-load steering at 70\% load. \todo{one sentence from
-the sweep: where it wins, where it loses.}
+latency by 16.1\% compared with least-load steering at 70\% load. A sweep over load and
+the share of local users shows where this holds: the method is ahead from about 30--40\%
+load (5--28\% lower p95), and behind at 10--30\% load when local users share the nearest
+site.
 
 Contributions:
 \begin{itemize}
@@ -251,6 +255,7 @@ B1 fewest in flight & 10 & 71 & 2483 & 1897 & --- \\
 B2 per-tool mean & 10 & 72 & 2503 & 1905 & $-1.2\%$ [$-4.7$, 2.1] \\
 Ours & 10 & 73 & \textbf{2085} & \textbf{1503} & \textbf{16.1\%} [13.2, 19.5] \\
 Oracle run times & 10 & 75 & 2079 & 1466 & 16.5\% [13.4, 19.5] \\
+Ours v2 (local work) & 10 & 76 & 2197 & 1506 & 11.4\% [9.8, 12.7] \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -258,17 +263,34 @@ Oracle run times & 10 & 75 & 2079 & 1466 & 16.5\% [13.4, 19.5] \\
 \textbf{Main comparison.} Table~\ref{tab:main}. Our method lowers p95 by 16.1\% compared
 with B1 and wins in all 10 runs. The gain comes from short calls (p95 $-20.2\%$): a lookup
 no longer lands behind a scan that B1 cannot see. The median is 2.5\% worse, because some
-calls travel to a farther site. \todo{p95 without any queue wait (latency minus wait) as
-the floor.}
+calls travel to a farther site. Without any queue wait (latency minus the wait measured
+at the replica) the p95 would be 0.45\,s for every policy, so our method removes 20\% of
+the part of the B1 p95 that is queue wait (2.04\,s).
 
 \textbf{What the gain comes from.} B2 uses the same wait formula without the arguments and
 does not beat B1, so the gain comes from reading the arguments. With exact run times the
 gain is 16.5\%, almost the same: here a better predictor would add little.
 
-\textbf{When steering pays off.} \todo{Figure: load 10--90\% $\times$ local-user share
-0/30/60\% at MEC-1, p50 and p95 per policy, crossover with B0 marked. Seed-1 reading:
-median crossover at about 23\% load with no local users, about 14\% with 30\%, below 10\%
-with 60\%; at 90\% load the policies converge.}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{../results/figs/sweep.png}
+\caption{Sweep over offered load (x) and the share of MEC-1 used by local users
+(columns), three seeds per cell. Rows: median and p95 latency of all calls, and the p95
+gain over B1 paired by seed (bars: 95\% bootstrap CI). Method v2 was run only in the
+low-load cells with local users (Section~\ref{sec:results}, failure cases).}
+\label{fig:sweep}
+\end{figure}
+
+\textbf{When steering pays off.} Figure~\ref{fig:sweep}. Against the nearest site (B0),
+steering lowers p95 in every cell, by 55--93\%. On the median the nearest site is faster
+only at low load with no local users (21 against 25\,ms at 10--20\% load), because a
+steered call pays a longer round trip; the median crossover is at about 23\% load. With
+local users at MEC-1, steering wins the median from the lowest load. Against B1, the
+method is ahead on p95 from about 40\% load with no local users, 31\% with 30\% local
+users and 27\% with 60\%. Above these loads it gains 5--28\%, most at 50--70\% load with
+30\% local users (24--28\%). At 90\% load the gain is 8--13\%: every site is busy, there is
+less to choose from, and the method gives up some median for the tail (197 against
+135\,ms with 30\% local users).
 
 \begin{table}[t]
 \centering
@@ -291,9 +313,21 @@ MEC-3 & 76.5 & 45.5 & 31.0 \\
 per call, which costs one round trip. It is small next to the waits above, but not next to
 a 5\,ms lookup at low load.
 
-\textbf{Failure cases.} \todo{from the sweep: at low load the method and B1 tie on p95 and
-sending a short call 30\,ms away is slower than waiting; at 90\% load every site is busy
-and moving a call does not help; cells where the method loses to B1.}
+\textbf{Failure cases.} At 10--30\% load with local users at MEC-1, the method loses to B1
+by up to 49\% on p95 (20\% load, 60\% local users: 0.85 against 0.53\,s). The predicted
+wait is close to the measured one, so the predictor is not at fault. At low load the
+controller expects few new calls in the next 200\,ms, so the water-filling sends almost
+every new connection to the site with the lowest wait plus round trip, MEC-1, as soon as
+one of its workers is free. Local users then start long scans there and our calls queue
+behind them. B1 counts the local calls in flight and avoids MEC-1. We tested a fix (v2):
+each replica tells local calls apart (they address the replica, not the anycast address)
+and adds the work they are expected to bring in the next 200\,ms to the reported wait. In
+the six low-load cells with local users, v2 is never behind B1 beyond noise; the worst
+cell goes from $-49\%$ to $+4\%$ (CI 1 to 6\%). In the main setting, however, v2 gains
+11.4\% over B1 against 16.1\% for v1; paired by seed it is 6.1\% behind v1 (CI 1.5 to
+11.4\%). It sends fewer calls to MEC-1 (29\% against 32\%), which moves work to the farther
+sites. The v2 runs were made two days after the v1 runs on a shared host, so part of this
+gap may be drift. We keep v1 as the method; a controller could switch to v2 at low load.
 
 \section{Limitations}
 \textbf{One host.} All sites share one host. When all three are busy, long scans run
@@ -308,7 +342,13 @@ that the choice of site also covers the network path, and we do not compare with
 gateway.
 
 \section{Conclusion}
-\todo{3 sentences.}
+Reading the arguments of the queued tool calls lets each replica report how long a new
+call would wait, and steering new connections at the UPF by this wait lowers the p95 call
+latency by 16.1\% compared with least-load steering on a 5G testbed. The gain comes from
+short calls that no longer wait behind long scans; it holds from about 30--40\% load and
+turns into a loss at low load when local users share the nearest site, which counting
+their expected work removes at some cost at high load. Next steps are a controller that
+picks the variant by load, more kinds of tools, and live agents on separate machines.
 
 \section*{Use of AI}
 AI assistants were used to search for papers by keyword, to review the feasibility of the

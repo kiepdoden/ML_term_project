@@ -127,7 +127,12 @@ axes[1][0].set_ylabel("p95, all calls (s)")
 axes[2][0].set_ylabel("p95 gain over B1 (%)")
 GAIN_FLOOR = -80                  # one wide CI (down to -130%) would flatten the rest
 axes[2][0].set_ylim(bottom=GAIN_FLOOR)
-handles, labels = axes[0][0].get_legend_handles_labels()
+seen = {}                          # v2 appears only in the columns with local users
+for ax in axes[0]:
+    for h, lab in zip(*ax.get_legend_handles_labels()):
+        seen.setdefault(lab, h)
+order = [STYLE[p][0] for p in STYLE if STYLE[p][0] in seen]
+handles, labels = [seen[lab] for lab in order], order
 fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False,
            bbox_to_anchor=(0.5, 1.0), fontsize=9)
 fig.text(0.5, 0.005, f"Mean over seeds {', '.join(map(str, seeds))}; gain bars: 95% bootstrap CI "
