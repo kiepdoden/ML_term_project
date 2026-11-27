@@ -51,8 +51,10 @@ for ph in $PHASES; do
     A) for seed in 1 2 3; do for L in 0.1 0.2 0.3; do for K in 0.3 0.6; do
          one sw_l${L/0./}_k${K/0./} method2 $seed $SW --load $L --bg-load $K
        done; done; done ;;
+    # W13 runs drop the first 60 s. The v2 runs in results/raw were made with the
+    # 30 s default and aligned afterwards with harness/rewarm.py 60.
     B) for seed in $(seq 1 10); do
-         one w13 method2 $seed $COMMON --load 0.7 --bg-load 0.3
+         one w13 method2 $seed $COMMON --warmup 60 --load 0.7 --bg-load 0.3
        done ;;
     C) for seed in 1 2 3; do for L in 0.5 0.7 0.9; do for K in 0.3 0.6; do
          one sw_l${L/0./}_k${K/0./} method2 $seed $SW --load $L --bg-load $K

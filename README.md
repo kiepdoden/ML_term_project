@@ -1,6 +1,7 @@
 # mcp_steer: wait-aware steering of MCP tool calls across 5G MEC sites
 
 Term project, Machine Learning and AI (Soongsil University GSICT, Fall 2026).
+Paper: [`paper/main.pdf`](paper/main.pdf) (ICLR 2027 template).
 
 An LLM agent on a 5G UE calls MCP tools. Each tool has a replica at three MEC sites, and
 the UPF picks one replica for every new connection (one call = one connection). Today's
@@ -28,6 +29,7 @@ users taking 30% of MEC-1, 300 s per run (first 60 s dropped). Gains are paired 
 | B2 per-tool mean run time (no arguments) | 10 | 72 | 2503 | 1905 | −1.2% [−4.7, 2.1] |
 | **Method v1** | 10 | 73 | **2085** | **1503** | **16.1% [13.2, 19.5]**, 10/10 runs |
 | Oracle (true run times) | 10 | 75 | 2079 | 1466 | 16.5% [13.4, 19.5] |
+| Method v2 (+ expected work of local users) | 10 | 76 | 2197 | 1506 | 11.4% [9.8, 12.7], 10/10 runs |
 
 - B2 uses the same wait formula without the arguments and does not beat B1, so the gain
   comes from reading the arguments.
@@ -37,8 +39,26 @@ users taking 30% of MEC-1, 300 s per run (first 60 s dropped). Gains are paired 
 - Per-call steering needs a new connection per call; setup costs 0.3 / 10 / 31 ms at
   MEC-1 / 2 / 3 (`results/conn_cost.csv`).
 
-The load × skew sweep (`harness/sweep.sh`, figure `results/figs/sweep*.png`) shows where
-steering pays off and where B0 is enough.
+- v2 (see the sweep) gains less here than v1 (11.4% against 16.1%) and sends 29% of the
+  calls to MEC-1 (v1: 32%). It ran two days after v1 on a shared host, so part of the gap
+  may be host drift.
+
+## Where steering pays off (sweep)
+
+Offered load 10–90% × share of local users at MEC-1 (0 / 30 / 60%), 3 seeds per cell,
+240 s per run (first 60 s dropped): `results/sw_stats.json`, `results/figs/sweep.png`.
+
+- Against B0 (nearest site) steering lowers p95 in every cell, by 55–93%. B0 keeps a lower
+  median only below about 23% load with no local users (21 against 25 ms).
+- Against B1 the method is ahead from about 40 / 31 / 27% load for 0 / 30 / 60% local
+  users, by 5–28% at 50–90% load.
+- At 10–30% load with local users it loses to B1, by up to 49% (20% load, 60% local
+  users): the controller expects few calls and sends almost every new one to MEC-1, where
+  the local users then start long scans.
+- **v2** (`method2`) adds the expected work of local users over the next 200 ms to the
+  reported wait. It removes that loss (worst cell −49% → +4%; −6% to +10% over the six
+  low-load cells) but gains less at 70% load (table above), so v1 stays the main method.
+  Switching between v1 and v2 by load is not built.
 
 ## Testbed (one host)
 
@@ -67,6 +87,7 @@ steering pays off and where B0 is enough.
 | `b2` | wait from the per-tool mean run time + RTT |
 | `method` | wait from the per-call predicted run time + RTT |
 | `oracle` | wait from the measured run time of each call + RTT (ablation) |
+| `method2` | as `method`, plus the expected work of local users in the next 200 ms (v2) |
 
 All policies use the same water-filling split, period and horizon; only the signal changes.
 
@@ -75,9 +96,11 @@ All policies use the same water-filling split, period and horizon; only the sign
 Paths are relative to the repo on the testbed host (`~/mcp_steer/repo`); the image
 `mcp-steer:0.1` holds the Python dependencies.
 
-1. **Sites.** In each VM: `mec/setup_vm.sh <site> <controller host:port> 2`, then
-   `python mec/gen_data.py --sf 10 --out /data10 --no-kv` and set `DATA=/data10` in the
-   `mcp-sql` service. On the host: `core/netem.sh`, `core/steer_init.sh`.
+1. **Testbed.** `testbed/setup_core.sh` (gtp5g v0.10.2, free5GC, 30 subscribers and UEs,
+   image `mcp-steer:0.1` from `core/Dockerfile.client`), then `testbed/setup_mec.sh` (three
+   incus VMs; runs `mec/setup_vm.sh` in each). In each VM:
+   `/opt/mcp/bin/python /opt/mcpsite/gen_data.py --sf 10 --out /data10 --no-kv` and set
+   `DATA=/data10` in the `mcp-sql` service. On the host: `core/netem.sh`, `core/steer_init.sh`.
 2. **RTT table.** `docker run --rm --network container:ueransim -v $PWD:/app mcp-steer:0.1 python tools/rtt_table.py --src 10.60.0.1 --out results/rtt_table`
 3. **Record the agent** (Qwen3-8B on vLLM, OpenAI-compatible API):
    `python agent/agent_record.py --llm <url> --model <name> --out results/chains_sf10.jsonl ...`
@@ -90,14 +113,39 @@ Paths are relative to the repo on the testbed host (`~/mcp_steer/repo`); the ima
    ```
    harness/run_matrix.sh w13 "b0 b1 b2 method oracle" "$(seq 1 10)" results/rec_sf10/chains_joined.jsonl \
      --tasks results/rec_sf10/check1/test_tasks.txt --clients 90 --think-scale 0.2 \
-     --capacity 4.3 --bg-workers 1.43 --load 0.7 --bg-load 0.3
+     --capacity 4.3 --bg-workers 1.43 --warmup 60 --load 0.7 --bg-load 0.3
    python harness/w13_stats.py w13 results/runs/w13_stats.json
    ```
 6. **Connection cost.** `python tools/conn_cost.py --src 10.60.0.1 --out results/conn_cost` (UE netns).
-7. **Sweep.** `harness/sweep.sh`, then `python harness/sweep_stats.py results/runs/sw_stats.json`
-   and `python report/plot_sweep.py results/runs/sw_stats.json results/figs/sweep.png`.
-8. **Reports.** `report/make_w12.py`, `report/make_w13.py` write the HTML pages of the
-   course checks.
+7. **Sweep.** `harness/sweep.sh`.
+8. **Method v2.** `harness/v2_runs.sh --deploy A B` (A: the low-load sweep cells with local
+   users, 3 seeds; B: the main setting, 10 seeds, tag `w13`), then
+   `python harness/w13_stats.py w13 results/runs/w13_v2_stats.json`,
+   `python harness/sweep_stats.py results/sw_stats.json`,
+   `python report/plot_sweep.py results/sw_stats.json results/figs/sweep.png` and
+   `python report/plot_sweep_slide.py results/sw_stats.json results/figs/sweep_slide.png`.
+9. **Reports.** `report/make_w12.py`, `report/make_w13.py` write the HTML pages of the
+   course checks; the paper is `paper/main.tex` (pdflatex + bibtex).
+
+## Raw data
+
+`results/raw/runs_w13.tar.xz` (53 runs of the main setting: B0 ×3, B1, B2, method, oracle,
+v2 ×10) and `results/raw/runs_sw.tar.xz` (234 sweep runs) hold each run's `client.jsonl`
+and `client.jsonl.meta.json` (for the v2 runs of the main setting also
+`client.jsonl.orig`, before `harness/rewarm.py 60` aligned their warmup with the others).
+To rebuild the statistics:
+
+```
+tar -xJf results/raw/runs_w13.tar.xz -C results/runs
+tar -xJf results/raw/runs_sw.tar.xz -C results/runs
+python harness/w13_stats.py w13 results/runs/w13_check.json
+python harness/sweep_stats.py results/runs/sw_check.json
+```
+
+This gives the same latency numbers as `results/runs/w13_v2_stats.json` and
+`results/sw_stats.json`. The share of calls per site needs the replica logs (about 1 GB,
+kept on the testbed, not in git); without them those fields come out as 0. The W12 baseline
+runs (`results/runs/base_*`) are in git as they are.
 
 ## Layout
 
@@ -109,8 +157,10 @@ Paths are relative to the repo on the testbed host (`~/mcp_steer/repo`); the ima
 | `predict/` | features from call arguments, training and check 1 |
 | `harness/` | replay of recorded chains, run scripts, stats |
 | `tools/` | RTT table and connection cost |
+| `testbed/` | host setup: 5G core and UEs, MEC VMs |
 | `report/` | course report pages and figures |
-| `results/` | recorded chains, check 1, per-run logs (`runs/<tag>_<policy>_s<seed>/`), tables |
+| `paper/` | paper source and PDF |
+| `results/` | recorded chains, check 1, per-run logs (`runs/<tag>_<policy>_s<seed>/`), stats, figures; `raw/` archives of the W13 and sweep runs |
 
 ## Notes from running it
 
